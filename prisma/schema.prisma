@@ -1,0 +1,726 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  EXPIRED
+}
+
+enum PlanName {
+  STARTER
+  PROFESSIONAL
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum BillingStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  MANAGER
+  TECHNICIAN
+  CUSTOMER
+}
+
+enum TicketStatus {
+  NEW_TICKET
+  ASSIGNED
+  ACCEPTED
+  TRAVELLING
+  REACHED_LOCATION
+  IN_PROGRESS
+  PENDING
+  COMPLETED
+  INVOICE_GENERATED
+  TICKET_CLOSED
+  CANCELLED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum ImageType {
+  BEFORE
+  AFTER
+  RAISED
+  SIGNATURE
+}
+
+enum PaymentMethod {
+  CASH
+  UPI
+  UPI_QR
+  RAZORPAY
+  CARD
+  NET_BANKING
+  WALLET
+}
+
+enum PaymentStatus {
+  PENDING
+  COLLECTED
+  VERIFIED
+  FAILED
+  REFUNDED
+}
+
+enum PendingReason {
+  SPARE_PARTS_NEEDED
+  CUSTOMER_NOT_AVAILABLE
+  ADDITIONAL_VISIT_REQUIRED
+}
+
+enum FileType {
+  IMAGE
+  VIDEO
+  PDF
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FLAT
+}
+
+// ─── Master Tables (no tenantId) ─────────────────────────────────────────────
+
+model Tenant {
+  id            String       @id @default(uuid())
+  companyName   String
+  tenantCode    String       @unique
+  contactPerson String?
+  email         String       @unique
+  phone         String?
+  logoUrl       String?
+  address       String?
+  city          String?
+  state         String?
+  pincode       String?
+  status        TenantStatus @default(ACTIVE)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  subscriptions Subscription[]
+  billings      Billing[]
+
+  @@map("tenants")
+}
+
+model SubscriptionPlan {
+  id              String   @id @default(uuid())
+  name            PlanName @unique
+  managerLimit    Int
+  technicianLimit Int
+  ticketLimit     Int
+  storageLimitGb  Int
+  price           Decimal  @db.Decimal(10, 2)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@map("subscription_plans")
+}
+
+model Subscription {
+  id        String             @id @default(uuid())
+  tenantId  String
+  planId    String
+  startDate DateTime
+  endDate   DateTime
+  status    SubscriptionStatus @default(ACTIVE)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id])
+  plan     SubscriptionPlan @relation(fields: [planId], references: [id])
+  billings Billing[]
+
+  @@map("subscriptions")
+}
+
+model Billing {
+  id             String        @id @default(uuid())
+  tenantId       String
+  subscriptionId String
+  amount         Decimal       @db.Decimal(10, 2)
+  paidAt         DateTime?
+  invoiceUrl     String?
+  status         BillingStatus @default(PENDING)
+  createdAt      DateTime      @default(now())
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id])
+  subscription Subscription @relation(fields: [subscriptionId], references: [id])
+
+  @@map("billing")
+}
+
+// ─── Business Tables ──────────────────────────────────────────────────────────
+
+model User {
+  id               String    @id @default(uuid())
+  tenantId         String
+  name             String
+  email            String
+  phone            String?
+  passwordHash     String
+  role             UserRole
+  isActive         Boolean   @default(true)
+  profileImageUrl  String?
+  gender           String?
+  birthDate        DateTime? @db.Date
+  resetToken       String?
+  resetTokenExpiry DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  technician    Technician?
+  customer      Customer?
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  refreshTokens RefreshToken[]
+  addresses     Address[]
+  statusLogs    TicketStatusLog[]
+  deviceTokens  DeviceToken[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId])
+  @@map("users")
+}
+
+model Customer {
+  id             String   @id @default(uuid())
+  tenantId       String
+  userId         String   @unique
+  name           String
+  email          String?
+  phone          String?
+  alternatePhone String?
+  address        String?
+  city           String?
+  pincode        String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user     User       @relation(fields: [userId], references: [id])
+  tickets  Ticket[]
+  feedback Feedback[]
+
+  @@index([tenantId])
+  @@map("customers")
+}
+
+model Address {
+  id         String   @id @default(uuid())
+  tenantId   String
+  userId     String
+  label      String   @default("home")
+  street     String
+  city       String
+  state      String?
+  country    String   @default("India")
+  postalCode String?
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, label])
+  @@index([tenantId])
+  @@map("addresses")
+}
+
+model Technician {
+  id         String   @id @default(uuid())
+  tenantId   String
+  userId     String   @unique
+  name       String
+  email      String?
+  phone      String?
+  isActive   Boolean  @default(true)
+  currentLat Float?
+  currentLng Float?
+  rating     Float    @default(0)
+  totalJobs  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user            User                     @relation(fields: [userId], references: [id])
+  tickets         Ticket[]
+  payments        Payment[]
+  attendance      Attendance[]
+  availability    TechnicianAvailability[]
+  locationHistory TechnicianLocation[]
+
+  @@index([tenantId])
+  @@map("technicians")
+}
+
+model TechnicianAvailability {
+  id           String   @id @default(uuid())
+  tenantId     String
+  technicianId String
+  date         DateTime @db.Date
+  startTime    String
+  endTime      String
+  isAvailable  Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  technician Technician @relation(fields: [technicianId], references: [id])
+
+  @@index([tenantId])
+  @@index([technicianId, date])
+  @@map("technician_availability")
+}
+
+model TechnicianLocation {
+  id           String   @id @default(uuid())
+  tenantId     String
+  technicianId String
+  latitude     Float
+  longitude    Float
+  accuracy     Float?
+  speed        Float?
+  timestamp    DateTime @default(now())
+
+  technician Technician @relation(fields: [technicianId], references: [id])
+
+  @@index([technicianId])
+  @@map("technician_locations")
+}
+
+model Attendance {
+  id           String    @id @default(uuid())
+  tenantId     String
+  technicianId String
+  checkInTime  DateTime
+  checkInLat   Float
+  checkInLng   Float
+  checkOutTime DateTime?
+  checkOutLat  Float?
+  checkOutLng  Float?
+  date         DateTime  @db.Date
+  createdAt    DateTime  @default(now())
+
+  technician Technician @relation(fields: [technicianId], references: [id])
+
+  @@index([tenantId])
+  @@index([technicianId, date])
+  @@map("attendance")
+}
+
+// ─── Service Catalog ─────────────────────────────────────────────────────────
+
+model ServiceCategory {
+  id          String   @id @default(uuid())
+  tenantId    String
+  name        String
+  description String?
+  imageUrl    String?
+  rating      Float    @default(0)
+  price       String?
+  isActive    Boolean  @default(true)
+  isDeleted   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  subCategories   ServiceSubCategory[]
+  services        Service[]
+  servicePackages ServicePackage[]
+  offers          Offer[]
+
+  @@index([tenantId])
+  @@map("service_categories")
+}
+
+model ServiceSubCategory {
+  id         String   @id @default(uuid())
+  tenantId   String
+  categoryId String
+  name       String
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  category      ServiceCategory @relation(fields: [categoryId], references: [id])
+  serviceCharges ServiceCharge?
+  tickets        Ticket[]
+
+  @@index([tenantId])
+  @@map("service_sub_categories")
+}
+
+model ServiceCharge {
+  id               String  @id @default(uuid())
+  tenantId         String
+  subCategoryId    String  @unique
+  serviceCharge    Decimal @db.Decimal(10, 2) @default(0)
+  inspectionCharge Decimal @db.Decimal(10, 2) @default(0)
+  emergencyCharge  Decimal @db.Decimal(10, 2) @default(0)
+
+  subCategory ServiceSubCategory @relation(fields: [subCategoryId], references: [id])
+
+  @@index([tenantId])
+  @@map("service_charges")
+}
+
+model Service {
+  id              String   @id @default(uuid())
+  tenantId        String
+  categoryId      String
+  name            String
+  description     String?
+  price           Decimal  @db.Decimal(10, 2)
+  originalPrice   Decimal  @db.Decimal(10, 2)
+  imageUrl        String?
+  warranty        String?
+  rating          Float    @default(0)
+  numberOfRatings Int      @default(0)
+  totalBookings   Int      @default(0)
+  isPopular       Boolean  @default(false)
+  displayOrder    Int?
+  isActive        Boolean  @default(true)
+  isDeleted       Boolean  @default(false)
+  features        String[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  category        ServiceCategory        @relation(fields: [categoryId], references: [id])
+  servicePackages ServicePackageService[]
+  offers          Offer[]
+
+  @@index([tenantId])
+  @@map("services")
+}
+
+model ServicePackage {
+  id          String   @id @default(uuid())
+  tenantId    String
+  categoryId  String
+  name        String
+  description String?
+  price       Decimal  @db.Decimal(10, 2)
+  discount    Decimal  @db.Decimal(10, 2) @default(0)
+  tag         String?
+  features    String[]
+  isDeleted   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  category ServiceCategory        @relation(fields: [categoryId], references: [id])
+  services ServicePackageService[]
+
+  @@index([tenantId])
+  @@map("service_packages")
+}
+
+model ServicePackageService {
+  packageId String
+  serviceId String
+
+  package ServicePackage @relation(fields: [packageId], references: [id])
+  service Service        @relation(fields: [serviceId], references: [id])
+
+  @@id([packageId, serviceId])
+  @@map("service_package_services")
+}
+
+model Offer {
+  id            String       @id @default(uuid())
+  tenantId      String
+  title         String
+  description   String?
+  offerType     String
+  discountType  DiscountType
+  discountValue Decimal      @db.Decimal(10, 2)
+  serviceId     String?
+  categoryId    String?
+  startDate     DateTime     @db.Date
+  endDate       DateTime     @db.Date
+  isActive      Boolean      @default(true)
+  isRecurring   Boolean      @default(false)
+  daysOfWeek    String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  service  Service?         @relation(fields: [serviceId], references: [id])
+  category ServiceCategory? @relation(fields: [categoryId], references: [id])
+
+  @@index([tenantId])
+  @@map("offers")
+}
+
+// ─── Tickets (Core Business Flow) ────────────────────────────────────────────
+
+model Ticket {
+  id            String          @id @default(uuid())
+  ticketNumber  String?
+  tenantId      String
+  customerId    String
+  technicianId  String?
+  categoryId    String
+  subCategoryId String
+  description   String?
+  priority      TicketPriority  @default(MEDIUM)
+  scheduledAt   DateTime?
+  status        TicketStatus    @default(NEW_TICKET)
+  pendingReason PendingReason?
+  pendingNotes  String?
+  closedAt      DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  customer    Customer           @relation(fields: [customerId], references: [id])
+  technician  Technician?        @relation(fields: [technicianId], references: [id])
+  subCategory ServiceSubCategory @relation(fields: [subCategoryId], references: [id])
+  images      TicketImage[]
+  statusLogs  TicketStatusLog[]
+  payment     Payment?
+  invoice     Invoice?
+  feedback    Feedback?
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, customerId])
+  @@map("tickets")
+}
+
+model TicketImage {
+  id        String    @id @default(uuid())
+  tenantId  String
+  ticketId  String
+  imageUrl  String
+  type      ImageType @default(RAISED)
+  createdAt DateTime  @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id])
+
+  @@index([ticketId])
+  @@map("ticket_images")
+}
+
+model TicketStatusLog {
+  id        String       @id @default(uuid())
+  tenantId  String
+  ticketId  String
+  status    TicketStatus
+  changedBy String
+  changedAt DateTime     @default(now())
+  notes     String?
+
+  ticket  Ticket @relation(fields: [ticketId], references: [id])
+  changer User   @relation(fields: [changedBy], references: [id])
+
+  @@index([ticketId])
+  @@map("ticket_status_logs")
+}
+
+// ─── Payments & Invoices ─────────────────────────────────────────────────────
+
+model Payment {
+  id          String        @id @default(uuid())
+  tenantId    String
+  ticketId    String        @unique
+  amount      Decimal       @db.Decimal(10, 2)
+  method      PaymentMethod @default(CASH)
+  status      PaymentStatus @default(PENDING)
+  collectedAt DateTime?
+  confirmedBy String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  ticket     Ticket      @relation(fields: [ticketId], references: [id])
+  technician Technician? @relation(fields: [confirmedBy], references: [id])
+  invoice    Invoice?
+
+  @@index([tenantId])
+  @@map("payments")
+}
+
+model Invoice {
+  id            String   @id @default(uuid())
+  tenantId      String
+  ticketId      String   @unique
+  paymentId     String   @unique
+  invoiceNumber String
+  prefix        String
+  subtotal      Decimal  @db.Decimal(10, 2)
+  gstPercent    Decimal  @db.Decimal(5, 2)
+  gstAmount     Decimal  @db.Decimal(10, 2)
+  total         Decimal  @db.Decimal(10, 2)
+  pdfUrl        String?
+  generatedAt   DateTime @default(now())
+
+  ticket  Ticket  @relation(fields: [ticketId], references: [id])
+  payment Payment @relation(fields: [paymentId], references: [id])
+
+  @@index([tenantId])
+  @@map("invoices")
+}
+
+// ─── Feedback ─────────────────────────────────────────────────────────────────
+
+model Feedback {
+  id         String   @id @default(uuid())
+  tenantId   String
+  ticketId   String   @unique
+  customerId String
+  rating     Int
+  review     String?
+  createdAt  DateTime @default(now())
+
+  ticket   Ticket   @relation(fields: [ticketId], references: [id])
+  customer Customer @relation(fields: [customerId], references: [id])
+
+  @@index([tenantId])
+  @@map("feedback")
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(uuid())
+  tenantId  String
+  userId    String
+  title     String
+  body      String
+  type      String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([tenantId])
+  @@index([userId])
+  @@map("notifications")
+}
+
+// ─── App Settings ─────────────────────────────────────────────────────────────
+
+model AppSettings {
+  id                     String   @id @default(uuid())
+  tenantId               String   @unique
+  shippingCharge         Decimal  @db.Decimal(10, 2) @default(50)
+  handlingCharge         Decimal  @db.Decimal(10, 2) @default(20)
+  taxPercentage          Decimal  @db.Decimal(5, 2)  @default(18)
+  platformFee            Decimal  @db.Decimal(10, 2) @default(10)
+  dailyDiscount          Decimal  @db.Decimal(5, 2)  @default(0)
+  weeklyDiscount         Decimal  @db.Decimal(5, 2)  @default(0)
+  monthlyDiscount        Decimal  @db.Decimal(5, 2)  @default(0)
+  shippingEnabled        Boolean  @default(false)
+  handlingEnabled        Boolean  @default(false)
+  dailyDiscountEnabled   Boolean  @default(false)
+  weeklyDiscountEnabled  Boolean  @default(false)
+  monthlyDiscountEnabled Boolean  @default(false)
+  updatedAt              DateTime @updatedAt
+
+  @@map("app_settings")
+}
+
+model TenantSetting {
+  id                    String   @id @default(uuid())
+  tenantId              String   @unique
+  gstEnabled            Boolean  @default(false)
+  gstNumber             String?
+  gstPercent            Decimal  @default(0) @db.Decimal(5, 2)
+  invoicePrefix         String   @default("INV")
+  invoiceNumberFormat   String   @default("INV-{YEAR}-{SEQ}")
+  upiId                 String?
+  upiAccountName        String?
+  upiQrImageUrl         String?
+  razorpayKeyId         String?
+  razorpayKeySecret     String?
+  razorpayWebhookSecret String?
+  upiMerchantId         String?
+  upiMerchantName       String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@map("tenant_settings")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  tenantId  String
+  userId    String
+  action    String
+  entity    String
+  entityId  String
+  oldValue  Json?
+  newValue  Json?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([tenantId])
+  @@map("audit_logs")
+}
+
+model DeviceToken {
+  id        String   @id @default(uuid())
+  tenantId  String
+  userId    String
+  token     String   @unique
+  platform  String   @default("ANDROID")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([tenantId])
+  @@map("device_tokens")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model EmailOtp {
+  id           String   @id @default(uuid())
+  tenantId     String
+  email        String
+  name         String
+  passwordHash String
+  phone        String?
+  otpHash      String
+  expiresAt    DateTime
+  isVerified   Boolean  @default(false)
+  attempts     Int      @default(0)
+  lastSentAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  @@index([tenantId, email])
+  @@map("email_otps")
+}

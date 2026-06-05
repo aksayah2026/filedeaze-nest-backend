@@ -1,0 +1,16 @@
+version: '3.9'
+
+# Development overrides — run with:
+# docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  api:
+    build:
+      context: .
+      target: builder
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npm run start:dev
+    environment:
+      NODE_ENV: development

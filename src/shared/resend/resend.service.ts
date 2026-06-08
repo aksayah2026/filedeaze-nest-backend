@@ -96,6 +96,42 @@ export class ResendService {
     return this.sendEmail(email, 'Verify Your Email Address', html);
   }
 
+  async sendForgotPasswordOtp(email: string, name: string, otp: string): Promise<void> {
+    const html = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><title>Reset Password OTP</title>
+<style>
+  body{margin:0;padding:0;background:#f4f6f9;font-family:'Segoe UI',Arial,sans-serif;}
+  .wrapper{max-width:560px;margin:40px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.08);}
+  .header{background:linear-gradient(135deg,#DC2626,#B91C1C);padding:36px 40px;text-align:center;}
+  .header h1{margin:0;color:#fff;font-size:26px;font-weight:700;}
+  .header p{margin:6px 0 0;color:rgba(255,255,255,.85);font-size:14px;}
+  .body{padding:36px 40px;}
+  .otp-box{background:#FEF2F2;border:2px dashed #DC2626;border-radius:10px;padding:24px;text-align:center;margin:20px 0;}
+  .otp-label{font-size:12px;font-weight:600;color:#6B7280;text-transform:uppercase;letter-spacing:1px;margin:0 0 10px;}
+  .otp-code{font-size:42px;font-weight:800;color:#DC2626;letter-spacing:10px;margin:0;font-family:'Courier New',monospace;}
+  .expiry{font-size:13px;color:#9CA3AF;margin:10px 0 0;}
+  .footer{background:#F9FAFB;padding:20px 40px;text-align:center;border-top:1px solid #E5E7EB;}
+  .footer p{margin:0;font-size:12px;color:#9CA3AF;}
+</style></head><body>
+<div class="wrapper">
+  <div class="header"><h1>FieldEaze</h1><p>Password Reset</p></div>
+  <div class="body">
+    <p style="font-size:16px;color:#374151;margin:0 0 12px;">Hello ${name},</p>
+    <p style="font-size:15px;color:#6B7280;line-height:1.6;margin:0 0 4px;">
+      We received a request to reset your password. Use the OTP below — it is valid for <strong>5 minutes</strong>.
+    </p>
+    <div class="otp-box">
+      <p class="otp-label">Password Reset OTP</p>
+      <p class="otp-code">${otp}</p>
+      <p class="expiry">⏱ Expires in <strong>5 minutes</strong> &nbsp;·&nbsp; Max 5 attempts</p>
+    </div>
+    <p style="font-size:13px;color:#9CA3AF;">If you did not request a password reset, ignore this email. Your password will remain unchanged.</p>
+  </div>
+  <div class="footer"><p>© ${new Date().getFullYear()} FieldEaze · Support Team</p></div>
+</div></body></html>`;
+    return this.sendEmail(email, 'Reset Your FieldEaze Password — OTP', html);
+  }
+
   async sendTicketAssigned(email: string, technicianName: string, ticketId: string): Promise<void> {
     return this.sendEmail(
       email,

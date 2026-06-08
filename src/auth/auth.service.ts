@@ -13,7 +13,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { ResendService } from '../shared/resend/resend.service';
 import * as bcrypt from 'bcrypt';
-import { randomBytes } from 'crypto';
+import { randomBytes, randomInt } from 'crypto';
 import { UserRole } from '@prisma/client';
 import { JwtPayload } from '../common/types/jwt-payload.type';
 import { SuperAdminLoginDto } from './dto/super-admin-login.dto';
@@ -25,6 +25,11 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { ForgotPasswordDto, ResetPasswordDto } from './dto/forgot-password.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ResendOtpDto } from './dto/resend-otp.dto';
+import {
+  CustomerForgotPasswordDto,
+  VerifyForgotPasswordOtpDto,
+  CustomerResetPasswordDto,
+} from './dto/customer-forgot-password.dto';
 
 const SALT_ROUNDS = 10;
 
@@ -660,6 +665,189 @@ export class AuthService {
         error instanceof InternalServerErrorException
       ) throw error;
       throw new InternalServerErrorException((error as Error).message || 'Authentication failed');
+    }
+  }
+
+  // ── Customer Forgot Password — OTP flow ──────────────────────────────────────
+
+  async customerForgotPassword(dto: CustomerForgotPasswordDto): Promise<{ message: string }> {
+    try {
+      const tenant = await this.prisma.tenant.findUnique({ where: { id: dto.tenantId } });
+      if (!tenant || tenant.status !== 'ACTIVE') {
+        return { message: 'If an account with this email exists, a reset OTP has been sent.' };
+      }
+
+      const user = await this.prisma.user.findFirst({
+        where: { tenantId: tenant.id, email: dto.email, role: UserRole.CUSTOMER, isActive: true },
+        select: { id: true, name: true, email: true },
+      });
+
+      // Always same message — prevents email enumeration
+      const SAFE_MSG = 'If an account with this email exists, a reset OTP has been sent.';
+      if (!user) return { message: SAFE_MSG };
+
+      // 30-second cooldown between sends
+      const last = await this.prisma.emailOtp.findFirst({
+        where: { tenantId: tenant.id, email: dto.email, purpose: 'FORGOT_PASSWORD', isVerified: false },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (last) {
+        const elapsed = Date.now() - new Date(last.lastSentAt).getTime();
+        if (elapsed < 30_000) {
+          const wait = Math.ceil((30_000 - elapsed) / 1000);
+          throw new BadRequestException(`Please wait ${wait} seconds before requesting a new OTP.`);
+        }
+      }
+
+      const otp     = String(randomInt(100_000, 999_999));
+      const otpHash = await bcrypt.hash(otp, SALT_ROUNDS);
+
+      // Invalidate any previous forgot-password OTPs for this email
+      await this.prisma.emailOtp.deleteMany({
+        where: { tenantId: tenant.id, email: dto.email, purpose: 'FORGOT_PASSWORD' },
+      });
+
+      await this.prisma.emailOtp.create({
+        data: {
+          tenantId:  tenant.id,
+          email:     dto.email,
+          purpose:   'FORGOT_PASSWORD',
+          name:      user.name,
+          otpHash,
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+          lastSentAt: new Date(),
+        },
+      });
+
+      await this.resend.sendForgotPasswordOtp(dto.email, user.name, otp);
+      this.logger.log(`Forgot-password OTP sent to ${dto.email} [tenant: ${tenant.tenantCode}]`);
+
+      return { message: SAFE_MSG };
+    } catch (error) {
+      if (
+        error instanceof UnauthorizedException ||
+        error instanceof NotFoundException ||
+        error instanceof BadRequestException ||
+        error instanceof ForbiddenException ||
+        error instanceof ConflictException ||
+        error instanceof InternalServerErrorException
+      ) throw error;
+      throw new InternalServerErrorException((error as Error).message || 'Failed to process request');
+    }
+  }
+
+  async verifyForgotPasswordOtp(dto: VerifyForgotPasswordOtpDto) {
+    try {
+      const tenant = await this.prisma.tenant.findUnique({ where: { id: dto.tenantId } });
+      if (!tenant) throw new BadRequestException('Invalid tenant');
+
+      const record = await this.prisma.emailOtp.findFirst({
+        where: { tenantId: tenant.id, email: dto.email, purpose: 'FORGOT_PASSWORD', isVerified: false },
+        orderBy: { createdAt: 'desc' },
+      });
+
+      if (!record) {
+        throw new BadRequestException('No pending OTP found. Please request a new one.');
+      }
+
+      if (record.attempts >= 5) {
+        throw new BadRequestException('Maximum attempts exceeded. Please request a new OTP.');
+      }
+
+      // Increment attempts before validation so it counts even on expiry check
+      await this.prisma.emailOtp.update({
+        where: { id: record.id },
+        data: { attempts: { increment: 1 } },
+      });
+
+      if (new Date() > record.expiresAt) {
+        throw new BadRequestException('OTP has expired. Please request a new one.');
+      }
+
+      const valid = await bcrypt.compare(dto.otp, record.otpHash);
+      if (!valid) {
+        const remaining = 4 - record.attempts;
+        throw new BadRequestException(
+          remaining > 0
+            ? `Invalid OTP. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.`
+            : 'Invalid OTP. Maximum attempts exceeded. Please request a new OTP.',
+        );
+      }
+
+      // OTP verified — mark it used
+      await this.prisma.emailOtp.update({ where: { id: record.id }, data: { isVerified: true } });
+
+      // Generate a short-lived reset token and store it on the user
+      const resetToken = randomBytes(32).toString('hex');
+      const user = await this.prisma.user.findFirst({
+        where: { tenantId: tenant.id, email: dto.email, role: UserRole.CUSTOMER, isActive: true },
+      });
+      if (!user) throw new BadRequestException('Account not found.');
+
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          resetToken,
+          resetTokenExpiry: new Date(Date.now() + 15 * 60 * 1000), // 15 minutes
+        },
+      });
+
+      this.logger.log(`Forgot-password OTP verified for ${dto.email} [tenant: ${tenant.tenantCode}]`);
+      return {
+        message: 'OTP verified. Use the resetToken to set a new password.',
+        data: { resetToken },
+      };
+    } catch (error) {
+      if (
+        error instanceof UnauthorizedException ||
+        error instanceof NotFoundException ||
+        error instanceof BadRequestException ||
+        error instanceof ForbiddenException ||
+        error instanceof ConflictException ||
+        error instanceof InternalServerErrorException
+      ) throw error;
+      throw new InternalServerErrorException((error as Error).message || 'Verification failed');
+    }
+  }
+
+  async customerResetPassword(dto: CustomerResetPasswordDto): Promise<{ message: string }> {
+    try {
+      if (dto.newPassword !== dto.confirmNewPassword) {
+        throw new BadRequestException('Passwords do not match');
+      }
+
+      const user = await this.prisma.user.findFirst({
+        where: {
+          resetToken:       dto.resetToken,
+          resetTokenExpiry: { gt: new Date() },
+          role:             UserRole.CUSTOMER,
+        },
+      });
+      if (!user) {
+        throw new BadRequestException('Invalid or expired reset token. Please verify your OTP again.');
+      }
+
+      const passwordHash = await bcrypt.hash(dto.newPassword, SALT_ROUNDS);
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { passwordHash, resetToken: null, resetTokenExpiry: null },
+      });
+
+      // Revoke all active sessions for security
+      await this.prisma.refreshToken.deleteMany({ where: { userId: user.id } });
+
+      this.logger.log(`Customer password reset via OTP: ${user.email}`);
+      return { message: 'Password reset successfully. Please log in with your new password.' };
+    } catch (error) {
+      if (
+        error instanceof UnauthorizedException ||
+        error instanceof NotFoundException ||
+        error instanceof BadRequestException ||
+        error instanceof ForbiddenException ||
+        error instanceof ConflictException ||
+        error instanceof InternalServerErrorException
+      ) throw error;
+      throw new InternalServerErrorException((error as Error).message || 'Password reset failed');
     }
   }
 }

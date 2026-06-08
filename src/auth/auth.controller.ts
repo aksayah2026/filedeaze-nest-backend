@@ -16,6 +16,11 @@ import { ResendOtpDto } from './dto/resend-otp.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { LogoutDto } from './dto/logout.dto';
 import { ForgotPasswordDto, ResetPasswordDto } from './dto/forgot-password.dto';
+import {
+  CustomerForgotPasswordDto,
+  VerifyForgotPasswordOtpDto,
+  CustomerResetPasswordDto,
+} from './dto/customer-forgot-password.dto';
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -97,7 +102,7 @@ export class AuthController {
   @Public()
   @Post('forgot-password')
   @Throttle({ default: { limit: 3, ttl: 60000 } })
-  @ApiOperation({ summary: 'Request a password reset email (15-min token)' })
+  @ApiOperation({ summary: 'Request a password reset email (15-min token) — for Admin / Super Admin' })
   forgotPassword(@Body() dto: ForgotPasswordDto) {
     return this.authService.forgotPassword(dto);
   }
@@ -105,8 +110,46 @@ export class AuthController {
   @Public()
   @Post('reset-password')
   @Throttle({ default: { limit: 5, ttl: 60000 } })
-  @ApiOperation({ summary: 'Reset password using token from email' })
+  @ApiOperation({ summary: 'Reset password using token from email — for Admin / Super Admin' })
   resetPassword(@Body() dto: ResetPasswordDto) {
     return this.authService.resetPassword(dto);
+  }
+
+  // ── Customer Forgot Password — OTP flow ──────────────────────────────────────
+
+  @Public()
+  @Post('customer/forgot-password')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({
+    summary: 'Customer forgot password — sends 6-digit OTP to registered email',
+    description:
+      'OTP expires in 5 minutes. Max 5 verification attempts. ' +
+      '30-second cooldown between resend requests. ' +
+      'Always returns the same message regardless of whether the email exists (anti-enumeration).',
+  })
+  customerForgotPassword(@Body() dto: CustomerForgotPasswordDto) {
+    return this.authService.customerForgotPassword(dto);
+  }
+
+  @Public()
+  @Post('customer/verify-forgot-password-otp')
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
+  @ApiOperation({
+    summary: 'Verify the forgot-password OTP — returns a resetToken valid for 15 minutes',
+    description: 'Pass the resetToken to POST /auth/customer/reset-password to complete the flow.',
+  })
+  verifyForgotPasswordOtp(@Body() dto: VerifyForgotPasswordOtpDto) {
+    return this.authService.verifyForgotPasswordOtp(dto);
+  }
+
+  @Public()
+  @Post('customer/reset-password')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @ApiOperation({
+    summary: 'Reset customer password using the resetToken from OTP verification',
+    description: 'Revokes all active sessions after a successful reset.',
+  })
+  customerResetPassword(@Body() dto: CustomerResetPasswordDto) {
+    return this.authService.customerResetPassword(dto);
   }
 }

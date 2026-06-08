@@ -103,6 +103,11 @@ enum DiscountType {
   FLAT
 }
 
+enum OtpPurpose {
+  REGISTRATION
+  FORGOT_PASSWORD
+}
+
 // ─── Master Tables (no tenantId) ─────────────────────────────────────────────
 
 model Tenant {
@@ -135,6 +140,7 @@ model SubscriptionPlan {
   ticketLimit     Int
   storageLimitGb  Int
   price           Decimal  @db.Decimal(10, 2)
+  isActive        Boolean  @default(true)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -186,14 +192,15 @@ model User {
   phone            String?
   passwordHash     String
   role             UserRole
-  isActive         Boolean   @default(true)
-  profileImageUrl  String?
-  gender           String?
-  birthDate        DateTime? @db.Date
-  resetToken       String?
-  resetTokenExpiry DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  isActive           Boolean   @default(true)
+  mustChangePassword Boolean   @default(false)
+  profileImageUrl    String?
+  gender             String?
+  birthDate          DateTime? @db.Date
+  resetToken         String?
+  resetTokenExpiry   DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   technician    Technician?
   customer      Customer?
@@ -617,6 +624,19 @@ model Notification {
   @@map("notifications")
 }
 
+// ─── Platform Settings (Super Admin) ─────────────────────────────────────────
+
+model PlatformSetting {
+  id              String   @id @default("system")
+  defaultCurrency String   @default("INR")
+  platformEmail   String?
+  supportContact  String?
+  defaultTimezone String   @default("Asia/Kolkata")
+  updatedAt       DateTime @updatedAt
+
+  @@map("platform_settings")
+}
+
 // ─── App Settings ─────────────────────────────────────────────────────────────
 
 model AppSettings {
@@ -708,19 +728,20 @@ model RefreshToken {
 }
 
 model EmailOtp {
-  id           String   @id @default(uuid())
+  id           String     @id @default(uuid())
   tenantId     String
   email        String
-  name         String
-  passwordHash String
+  purpose      OtpPurpose @default(REGISTRATION)
+  name         String?
+  passwordHash String?
   phone        String?
   otpHash      String
   expiresAt    DateTime
-  isVerified   Boolean  @default(false)
-  attempts     Int      @default(0)
-  lastSentAt   DateTime @default(now())
-  createdAt    DateTime @default(now())
+  isVerified   Boolean    @default(false)
+  attempts     Int        @default(0)
+  lastSentAt   DateTime   @default(now())
+  createdAt    DateTime   @default(now())
 
-  @@index([tenantId, email])
+  @@index([tenantId, email, purpose])
   @@map("email_otps")
 }

@@ -65,7 +65,7 @@ export class TechnicianService {
 
       const [attendance] = await Promise.all([
         this.prisma.attendance.create({
-          data: { tenantId, technicianId: tech.id, checkInTime: new Date(), checkInLat: dto.lat, checkInLng: dto.lng, date: today },
+          data: { tenantId, technicianId: tech.id, checkInTime: new Date(), checkInLat: dto.lat, checkInLng: dto.lng, date: today, checkInRemarks: dto.remarks },
         }),
         this.prisma.technician.update({ where: { id: tech.id }, data: { currentLat: dto.lat, currentLng: dto.lng } }),
       ]);
@@ -93,7 +93,7 @@ export class TechnicianService {
       const [updated] = await Promise.all([
         this.prisma.attendance.update({
           where: { id: attendance.id },
-          data: { checkOutTime: new Date(), checkOutLat: dto.lat, checkOutLng: dto.lng },
+          data: { checkOutTime: new Date(), checkOutLat: dto.lat, checkOutLng: dto.lng, checkOutRemarks: dto.remarks },
         }),
         this.prisma.technician.update({ where: { id: tech.id }, data: { currentLat: dto.lat, currentLng: dto.lng } }),
       ]);
@@ -105,13 +105,21 @@ export class TechnicianService {
     }
   }
 
-  async getAttendanceHistory(tenantId: string, userId: string) {
+  async getAttendanceHistory(tenantId: string, userId: string, month?: number, year?: number) {
     try {
       const tech = await this.resolveTechnician(userId, tenantId);
+
+      let dateFilter: Record<string, any> = {};
+      if (month && year) {
+        const start = new Date(year, month - 1, 1);
+        const end   = new Date(year, month, 1);
+        dateFilter = { date: { gte: start, lt: end } };
+      }
+
       const records = await this.prisma.attendance.findMany({
-        where: { technicianId: tech.id, tenantId },
+        where: { technicianId: tech.id, tenantId, ...dateFilter },
         orderBy: { date: 'desc' },
-        take: 30,
+        take: month && year ? undefined : 30,
       });
       return { data: records };
     } catch (error) {
@@ -133,12 +141,19 @@ export class TechnicianService {
 
   // ── Tickets ────────────────────────────────────────────────────────────────
 
-  async listMyTickets(tenantId: string, userId: string) {
+  async listMyTickets(tenantId: string, userId: string, month?: number, year?: number) {
     try {
       const tech = await this.resolveTechnician(userId, tenantId);
 
+      let dateFilter: Record<string, any> = {};
+      if (month && year) {
+        const start = new Date(year, month - 1, 1);
+        const end   = new Date(year, month, 1);
+        dateFilter = { createdAt: { gte: start, lt: end } };
+      }
+
       const tickets = await this.prisma.ticket.findMany({
-        where: { tenantId, technicianId: tech.id, status: { not: TicketStatus.TICKET_CLOSED } },
+        where: { tenantId, technicianId: tech.id, status: { not: TicketStatus.TICKET_CLOSED }, ...dateFilter },
         include: {
           customer: true,
           subCategory: { include: { category: true } },
@@ -172,6 +187,32 @@ export class TechnicianService {
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
       handlePrismaError(error, 'Ticket');
+    }
+  }
+
+  async getMyInvoices(tenantId: string, userId: string, month?: number, year?: number) {
+    try {
+      const tech = await this.resolveTechnician(userId, tenantId);
+
+      let dateFilter: Record<string, any> = {};
+      if (month && year) {
+        const start = new Date(year, month - 1, 1);
+        const end   = new Date(year, month, 1);
+        dateFilter = { generatedAt: { gte: start, lt: end } };
+      }
+
+      const invoices = await this.prisma.invoice.findMany({
+        where: { tenantId, ticket: { technicianId: tech.id }, ...dateFilter },
+        include: {
+          ticket: { select: { ticketNumber: true, customer: { select: { name: true } } } },
+          payment: { select: { method: true, collectedAt: true } },
+        },
+        orderBy: { generatedAt: 'desc' },
+      });
+      return { data: invoices };
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
+      handlePrismaError(error, 'Invoice');
     }
   }
 
@@ -210,6 +251,9 @@ export class TechnicianService {
 
       const customerUserId = await this.getCustomerUserId(ticketId);
       if (customerUserId) void this.notifications.onTicketStatusChanged(tenantId, customerUserId, dto.status, ticketId);
+      if (dto.status === TicketStatus.PENDING) {
+        void this.notifications.onTicketMarkedPending(tenantId, ticketId, tech.name, dto.pendingReason ?? dto.notes ?? 'Pending');
+      }
 
       return { message: `Ticket status updated to ${dto.status}`, data: updated };
     } catch (error) {
@@ -243,7 +287,12 @@ export class TechnicianService {
         }
         await tx.ticket.update({ where: { id: ticketId }, data: { status: TicketStatus.COMPLETED } });
         await tx.ticketStatusLog.create({
-          data: { tenantId, ticketId, status: TicketStatus.COMPLETED, changedBy: userId, notes: dto.notes },
+          data: {
+            tenantId, ticketId, status: TicketStatus.COMPLETED, changedBy: userId,
+            notes: dto.lat && dto.lng
+              ? `${dto.notes} | GPS: ${dto.lat},${dto.lng}`
+              : dto.notes,
+          },
         });
       });
 
@@ -257,7 +306,7 @@ export class TechnicianService {
     }
   }
 
-  async markPending(tenantId: string, userId: string, ticketId: string, dto: MarkPendingDto) {
+  async markPending(tenantId: string, userId: string, ticketId: string, dto: MarkPendingDto, file?: Express.Multer.File) {
     try {
       const tech = await this.resolveTechnician(userId, tenantId);
       const ticket = await this.resolveTicketForTechnician(ticketId, tenantId, tech.id);
@@ -275,6 +324,15 @@ export class TechnicianService {
           data: { tenantId, ticketId, status: TicketStatus.PENDING, changedBy: userId, notes: `${dto.reason}: ${dto.notes}` },
         });
       });
+
+      if (file) {
+        const { url } = await this.uploadService.uploadTicketImage(tenantId, ticketId, file);
+        await this.prisma.ticketImage.create({ data: { tenantId, ticketId, imageUrl: url, type: ImageType.BEFORE } });
+      }
+
+      const customerUserId = await this.getCustomerUserId(ticketId);
+      if (customerUserId) void this.notifications.onTicketStatusChanged(tenantId, customerUserId, 'PENDING', ticketId);
+      void this.notifications.onTicketMarkedPending(tenantId, ticketId, tech.name, dto.reason);
 
       return { message: 'Ticket marked as pending' };
     } catch (error) {
@@ -298,6 +356,8 @@ export class TechnicianService {
           data: { tenantId, ticketId, status: TicketStatus.NEW_TICKET, changedBy: userId, notes: `Rejected: ${dto.reason}` },
         });
       });
+
+      void this.notifications.onTicketRejectedByTechnician(tenantId, ticketId, tech.name, dto.reason);
 
       return { message: 'Ticket rejected and returned to the queue' };
     } catch (error) {
@@ -335,6 +395,8 @@ export class TechnicianService {
 
       const invoiceData = await this.invoiceService.generateInvoiceData(tenantId, dto.amount);
 
+      let createdInvoiceId: string | undefined;
+
       await this.prisma.$transaction(async (tx) => {
         const payment = await tx.payment.create({
           data: {
@@ -347,9 +409,10 @@ export class TechnicianService {
           },
         });
 
-        await tx.invoice.create({
+        const invoice = await tx.invoice.create({
           data: { tenantId, ticketId, paymentId: payment.id, ...invoiceData },
         });
+        createdInvoiceId = invoice.id;
 
         await tx.ticket.update({ where: { id: ticketId }, data: { status: TicketStatus.INVOICE_GENERATED } });
         await tx.ticketStatusLog.create({
@@ -359,6 +422,8 @@ export class TechnicianService {
 
       const customerUserId = await this.getCustomerUserId(ticketId);
       if (customerUserId) void this.notifications.onTicketStatusChanged(tenantId, customerUserId, 'INVOICE_GENERATED', ticketId);
+
+      if (createdInvoiceId) void this.invoiceService.generateAndUploadPdf(createdInvoiceId, tenantId);
 
       return { message: 'Payment collected and invoice generated successfully' };
     } catch (error) {

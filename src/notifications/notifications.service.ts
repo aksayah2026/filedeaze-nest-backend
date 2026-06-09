@@ -120,6 +120,54 @@ export class NotificationsService {
     }
   }
 
+  private async notifyManagers(tenantId: string, title: string, body: string, type: string, data?: Record<string, string>): Promise<void> {
+    const managers = await this.prisma.user.findMany({
+      where: { tenantId, role: { in: ['ADMIN', 'MANAGER'] }, isActive: true },
+      select: { id: true },
+    });
+    await Promise.all(
+      managers.map((m) => this.notifyUser(tenantId, m.id, title, body, type, data)),
+    );
+  }
+
+  async onTicketRejectedByTechnician(
+    tenantId: string,
+    ticketId: string,
+    technicianName: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      await this.notifyManagers(
+        tenantId,
+        'Ticket Rejected by Technician',
+        `${technicianName} rejected ticket #${ticketId.slice(-6).toUpperCase()}. Reason: ${reason}`,
+        'TICKET_REJECTED',
+        { ticketId },
+      );
+    } catch (error) {
+      this.logger.error(`onTicketRejectedByTechnician failed: ${(error as Error).message}`);
+    }
+  }
+
+  async onTicketMarkedPending(
+    tenantId: string,
+    ticketId: string,
+    technicianName: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      await this.notifyManagers(
+        tenantId,
+        'Ticket Marked as Pending',
+        `${technicianName} put ticket #${ticketId.slice(-6).toUpperCase()} on hold. Reason: ${reason}`,
+        'TICKET_PENDING',
+        { ticketId },
+      );
+    } catch (error) {
+      this.logger.error(`onTicketMarkedPending failed: ${(error as Error).message}`);
+    }
+  }
+
   // ── Device Token Management ───────────────────────────────────────────────
 
   async registerDeviceToken(tenantId: string, userId: string, token: string, platform: string) {

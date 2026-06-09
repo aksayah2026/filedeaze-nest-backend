@@ -39,6 +39,25 @@ export class CloudinaryService {
     });
   }
 
+  async uploadDocument(buffer: Buffer, publicId: string): Promise<{ url: string; publicId: string }> {
+    return new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        { public_id: publicId, resource_type: 'raw', overwrite: true, format: 'pdf' },
+        (error: UploadApiErrorResponse | undefined, result: UploadApiResponse | undefined) => {
+          if (error || !result) {
+            reject(new InternalServerErrorException('Document upload failed: ' + (error?.message ?? 'unknown error')));
+          } else {
+            resolve({ url: result.secure_url, publicId: result.public_id });
+          }
+        },
+      );
+      const readable = new Readable();
+      readable.push(buffer);
+      readable.push(null);
+      readable.pipe(uploadStream);
+    });
+  }
+
   async deleteFile(publicId: string): Promise<void> {
     try {
       await cloudinary.uploader.destroy(publicId, { resource_type: 'image' });

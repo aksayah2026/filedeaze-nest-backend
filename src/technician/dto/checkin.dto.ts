@@ -1,5 +1,5 @@
-import { IsNumber, Min, Max } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { IsNumber, IsOptional, IsString, MaxLength, Min, Max } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CheckInDto {
   @ApiProperty({ example: 12.9716 })
@@ -13,6 +13,12 @@ export class CheckInDto {
   @Min(-180, { message: 'Longitude must be between -180 and 180' })
   @Max(180, { message: 'Longitude must be between -180 and 180' })
   lng: number;
+
+  @ApiPropertyOptional({ example: 'Starting shift from home office', maxLength: 500 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  remarks?: string;
 }
 
 export class UpdateLocationDto {

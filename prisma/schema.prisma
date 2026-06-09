@@ -328,6 +328,8 @@ model Attendance {
   checkOutTime DateTime?
   checkOutLat  Float?
   checkOutLng  Float?
+  checkInRemarks  String?
+  checkOutRemarks String?
   date         DateTime  @db.Date
   createdAt    DateTime  @default(now())
 

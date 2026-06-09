@@ -51,9 +51,21 @@ export class TechnicianController {
   }
 
   @Get('attendance')
-  @ApiOperation({ summary: 'Get attendance history (last 30 days)' })
-  getAttendanceHistory(@TenantId() tenantId: string, @CurrentUser() user: JwtPayload) {
-    return this.service.getAttendanceHistory(tenantId, user.sub);
+  @ApiOperation({ summary: 'Get attendance history — last 30 records, or filtered by month/year' })
+  @ApiQuery({ name: 'month', required: false, type: Number, description: '1–12' })
+  @ApiQuery({ name: 'year',  required: false, type: Number, description: 'e.g. 2026' })
+  getAttendanceHistory(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: JwtPayload,
+    @Query('month') month?: string,
+    @Query('year')  year?: string,
+  ) {
+    return this.service.getAttendanceHistory(
+      tenantId,
+      user.sub,
+      month ? parseInt(month, 10) : undefined,
+      year  ? parseInt(year,  10) : undefined,
+    );
   }
 
   @Patch('location')
@@ -64,10 +76,40 @@ export class TechnicianController {
 
   // ── Tickets ─────────────────────────────────────────────────────────────
 
+  @Get('invoices')
+  @ApiOperation({ summary: 'List my invoices with optional month filter' })
+  @ApiQuery({ name: 'month', required: false, type: Number, description: '1–12' })
+  @ApiQuery({ name: 'year',  required: false, type: Number, description: 'e.g. 2026' })
+  getMyInvoices(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: JwtPayload,
+    @Query('month') month?: string,
+    @Query('year')  year?: string,
+  ) {
+    return this.service.getMyInvoices(
+      tenantId,
+      user.sub,
+      month ? parseInt(month, 10) : undefined,
+      year  ? parseInt(year,  10) : undefined,
+    );
+  }
+
   @Get('tickets')
-  @ApiOperation({ summary: 'List my assigned tickets' })
-  listMyTickets(@TenantId() tenantId: string, @CurrentUser() user: JwtPayload) {
-    return this.service.listMyTickets(tenantId, user.sub);
+  @ApiOperation({ summary: 'List my assigned tickets with optional month filter' })
+  @ApiQuery({ name: 'month', required: false, type: Number, description: '1–12' })
+  @ApiQuery({ name: 'year',  required: false, type: Number, description: 'e.g. 2026' })
+  listMyTickets(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: JwtPayload,
+    @Query('month') month?: string,
+    @Query('year')  year?: string,
+  ) {
+    return this.service.listMyTickets(
+      tenantId,
+      user.sub,
+      month ? parseInt(month, 10) : undefined,
+      year  ? parseInt(year,  10) : undefined,
+    );
   }
 
   @Get('tickets/:id')
@@ -99,14 +141,17 @@ export class TechnicianController {
   }
 
   @Post('tickets/:id/pending')
-  @ApiOperation({ summary: 'Mark ticket as pending with a reason' })
+  @ApiOperation({ summary: 'Mark ticket as pending with a reason and optional photo' })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file'))
   markPending(
     @TenantId() tenantId: string,
     @CurrentUser() user: JwtPayload,
     @Param('id') id: string,
     @Body() dto: MarkPendingDto,
+    @UploadedFile() file?: Express.Multer.File,
   ) {
-    return this.service.markPending(tenantId, user.sub, id, dto);
+    return this.service.markPending(tenantId, user.sub, id, dto, file);
   }
 
   @Post('tickets/:id/reject')

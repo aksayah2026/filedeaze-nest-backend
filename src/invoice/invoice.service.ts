@@ -30,9 +30,15 @@ export class InvoiceService {
       const gstEnabled  = settings?.gstEnabled ?? false;
       const gstPercent  = gstEnabled ? Number(settings?.gstPercent ?? 0) : 0;
 
-      const invoiceCount  = await this.prisma.invoice.count({ where: { tenantId } });
-      const year          = new Date().getFullYear();
-      const invoiceNumber = `${prefix}-${year}-${String(invoiceCount + 1).padStart(5, '0')}`;
+      const invoiceCount = await this.prisma.invoice.count({ where: { tenantId } });
+      const year         = new Date().getFullYear();
+      const seq          = String(invoiceCount + 1).padStart(5, '0');
+      const invoiceNumber = settings?.invoiceNumberFormat
+        ? settings.invoiceNumberFormat
+            .replace('{PREFIX}', prefix)
+            .replace('{YEAR}',   String(year))
+            .replace('{SEQ}',    seq)
+        : `${prefix}-${year}-${seq}`;
 
       const subtotal  = amount;
       const gstAmount = Math.round((subtotal * gstPercent) / 100 * 100) / 100;

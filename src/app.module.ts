@@ -18,6 +18,7 @@ import { AvailabilityModule } from './availability/availability.module';
 import { ServicesModule } from './services/services.module';
 import { CategoriesModule } from './categories/categories.module';
 import { PackagesModule } from './packages/packages.module';
+import { SkillModule } from './skill/skill.module';
 import appConfig from './config/app.config';
 import jwtConfig from './config/jwt.config';
 import cloudinaryConfig from './config/cloudinary.config';
@@ -45,6 +46,7 @@ import cloudinaryConfig from './config/cloudinary.config';
     ServicesModule,
     CategoriesModule,
     PackagesModule,
+    SkillModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

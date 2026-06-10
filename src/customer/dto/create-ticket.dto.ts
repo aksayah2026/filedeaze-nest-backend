@@ -24,4 +24,9 @@ export class CreateTicketDto {
   @IsOptional()
   @IsDateString({}, { message: 'Scheduled date must be a valid ISO date string' })
   scheduledAt?: string;
+
+  @ApiPropertyOptional({ example: '12, Main Street, Bengaluru - 560001' })
+  @IsOptional()
+  @IsString({ message: 'Service address must be a string' })
+  serviceAddress?: string;
 }

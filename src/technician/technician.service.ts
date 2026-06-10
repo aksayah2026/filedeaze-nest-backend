@@ -10,6 +10,7 @@ import { UploadService } from '../upload/upload.service';
 import { InvoiceService } from '../invoice/invoice.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { handlePrismaError } from '../common/utils/prisma-error.handler';
+import { writeAuditLog } from '../common/utils/audit.helper';
 import { TicketStatus, ImageType, PaymentStatus } from '@prisma/client';
 import { TICKET_FORWARD_TRANSITIONS } from '../common/constants/ticket-status.constant';
 import { CheckInDto, UpdateLocationDto } from './dto/checkin.dto';
@@ -131,7 +132,12 @@ export class TechnicianService {
   async updateLocation(tenantId: string, userId: string, dto: UpdateLocationDto) {
     try {
       const tech = await this.resolveTechnician(userId, tenantId);
-      await this.prisma.technician.update({ where: { id: tech.id }, data: { currentLat: dto.lat, currentLng: dto.lng } });
+      await Promise.all([
+        this.prisma.technician.update({ where: { id: tech.id }, data: { currentLat: dto.lat, currentLng: dto.lng } }),
+        this.prisma.technicianLocation.create({
+          data: { tenantId, technicianId: tech.id, latitude: dto.lat, longitude: dto.lng },
+        }),
+      ]);
       return { message: 'Location updated successfully' };
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
@@ -254,6 +260,7 @@ export class TechnicianService {
       if (dto.status === TicketStatus.PENDING) {
         void this.notifications.onTicketMarkedPending(tenantId, ticketId, tech.name, dto.pendingReason ?? dto.notes ?? 'Pending');
       }
+      writeAuditLog(this.prisma, { tenantId, userId, action: 'STATUS_CHANGE', entity: 'Ticket', entityId: ticketId, newValue: { status: dto.status } });
 
       return { message: `Ticket status updated to ${dto.status}`, data: updated };
     } catch (error) {
@@ -358,6 +365,8 @@ export class TechnicianService {
       });
 
       void this.notifications.onTicketRejectedByTechnician(tenantId, ticketId, tech.name, dto.reason);
+      const customerUserId = await this.getCustomerUserId(ticketId);
+      if (customerUserId) void this.notifications.onTicketStatusChanged(tenantId, customerUserId, 'REJECTED', ticketId);
 
       return { message: 'Ticket rejected and returned to the queue' };
     } catch (error) {
@@ -393,6 +402,21 @@ export class TechnicianService {
       const existingPayment = await this.prisma.payment.findUnique({ where: { ticketId } });
       if (existingPayment) throw new ConflictException('Payment has already been recorded for this ticket');
 
+      if (dto.amount <= 0) throw new BadRequestException('Payment amount must be greater than 0');
+
+      if (ticket.subCategoryId) {
+        const subCat = await this.prisma.serviceSubCategory.findFirst({
+          where: { id: ticket.subCategoryId },
+          include: { serviceCharges: true },
+        });
+        const charge = subCat?.serviceCharges?.[0];
+        if (charge && dto.amount < Number(charge.inspectionCharge)) {
+          throw new BadRequestException(
+            `Minimum collectible amount for this service is ₹${Number(charge.inspectionCharge).toFixed(2)} (inspection charge)`,
+          );
+        }
+      }
+
       const invoiceData = await this.invoiceService.generateInvoiceData(tenantId, dto.amount);
 
       let createdInvoiceId: string | undefined;
@@ -424,6 +448,7 @@ export class TechnicianService {
       if (customerUserId) void this.notifications.onTicketStatusChanged(tenantId, customerUserId, 'INVOICE_GENERATED', ticketId);
 
       if (createdInvoiceId) void this.invoiceService.generateAndUploadPdf(createdInvoiceId, tenantId);
+      writeAuditLog(this.prisma, { tenantId, userId, action: 'COLLECT_PAYMENT', entity: 'Payment', entityId: ticketId, newValue: { amount: dto.amount, method: dto.method } });
 
       return { message: 'Payment collected and invoice generated successfully' };
     } catch (error) {

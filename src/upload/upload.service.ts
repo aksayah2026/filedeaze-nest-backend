@@ -35,6 +35,14 @@ export class UploadService {
     return { url, key };
   }
 
+  async uploadProfilePhoto(tenantId: string, userId: string, file: Express.Multer.File): Promise<UploadedFile> {
+    this.validateFile(file);
+    const publicId = this.cloudinary.buildPublicId(tenantId, `profiles/${userId}`, file.originalname);
+    const { url, publicId: key } = await this.cloudinary.uploadFile(file.buffer, file.mimetype, publicId);
+    this.logger.log(`Uploaded profile photo: ${key}`);
+    return { url, key };
+  }
+
   async uploadUpiQr(tenantId: string, file: Express.Multer.File): Promise<UploadedFile> {
     this.validateFile(file);
     const publicId = this.cloudinary.buildPublicId(tenantId, 'upi-qr', file.originalname);

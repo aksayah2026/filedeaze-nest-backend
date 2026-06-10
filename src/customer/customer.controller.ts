@@ -1,9 +1,9 @@
 import {
-  Controller, Get, Post, Patch, Delete, Body, Param,
+  Controller, Get, Post, Patch, Delete, Body, Param, Query,
   UseGuards, UseInterceptors, UploadedFiles,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiQuery } from '@nestjs/swagger';
 import { CustomerService } from './customer.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -11,7 +11,7 @@ import { TenantGuard } from '../common/guards/tenant.guard';
 import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, TenantId } from '../common/decorators/current-user.decorator';
 import { JwtPayload } from '../common/types/jwt-payload.type';
-import { UserRole } from '@prisma/client';
+import { UserRole, TicketStatus } from '@prisma/client';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { SubmitFeedbackDto } from './dto/submit-feedback.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -25,6 +25,12 @@ import { CancelTicketDto } from './dto/cancel-ticket.dto';
 @Controller('mobile/customer')
 export class CustomerController {
   constructor(private readonly service: CustomerService) {}
+
+  @Get('dashboard')
+  @ApiOperation({ summary: 'Customer dashboard — open/completed ticket counts + recent invoice' })
+  getDashboard(@TenantId() tenantId: string, @CurrentUser() user: JwtPayload) {
+    return this.service.getDashboard(tenantId, user.sub);
+  }
 
   @Get('profile')
   @ApiOperation({ summary: 'Get my profile' })
@@ -56,9 +62,14 @@ export class CustomerController {
   }
 
   @Get('tickets')
-  @ApiOperation({ summary: 'List my tickets' })
-  listMyTickets(@TenantId() tenantId: string, @CurrentUser() user: JwtPayload) {
-    return this.service.listMyTickets(tenantId, user.sub);
+  @ApiOperation({ summary: 'List my tickets with optional status filter' })
+  @ApiQuery({ name: 'status', required: false, enum: TicketStatus })
+  listMyTickets(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: JwtPayload,
+    @Query('status') status?: TicketStatus,
+  ) {
+    return this.service.listMyTickets(tenantId, user.sub, status);
   }
 
   @Get('tickets/:id')

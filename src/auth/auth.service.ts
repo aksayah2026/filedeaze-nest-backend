@@ -15,6 +15,7 @@ import { ResendService } from '../shared/resend/resend.service';
 import * as bcrypt from 'bcrypt';
 import { randomBytes, randomInt } from 'crypto';
 import { UserRole } from '@prisma/client';
+import { writeAuditLog } from '../common/utils/audit.helper';
 import { JwtPayload } from '../common/types/jwt-payload.type';
 import { SuperAdminLoginDto } from './dto/super-admin-login.dto';
 import { TenantLoginDto } from './dto/tenant-login.dto';
@@ -165,6 +166,7 @@ export class AuthService {
       await this.persistRefreshToken(user.id, tokens.refreshToken);
 
       this.logger.log(`Tenant user logged in: ${user.email} [${tenant.tenantCode}]`);
+      writeAuditLog(this.prisma, { tenantId: tenant.id, userId: user.id, action: 'LOGIN', entity: 'User', entityId: user.id, newValue: { role: user.role } });
       return {
         message: 'Login successful',
         data: {
@@ -211,6 +213,7 @@ export class AuthService {
       const tokens = this.buildTokens(payload);
       await this.persistRefreshToken(user.id, tokens.refreshToken);
 
+      writeAuditLog(this.prisma, { tenantId: tenant.id, userId: user.id, action: 'LOGIN', entity: 'User', entityId: user.id, newValue: { role: user.role } });
       return {
         message: 'Login successful',
         data: {
@@ -487,6 +490,7 @@ export class AuthService {
       const tokens = this.buildTokens(payload);
       await this.persistRefreshToken(user.id, tokens.refreshToken);
 
+      writeAuditLog(this.prisma, { tenantId: tenant.id, userId: user.id, action: 'LOGIN', entity: 'User', entityId: user.id, newValue: { role: user.role } });
       return {
         message: 'Login successful',
         data: {

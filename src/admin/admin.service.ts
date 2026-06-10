@@ -14,6 +14,8 @@ import { UserRole } from '@prisma/client';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
 import { CreateManagerDto, UpdateManagerDto } from './dto/create-manager.dto';
+import { UpdateAdminProfileDto } from './dto/update-profile.dto';
+import { writeAuditLog } from '../common/utils/audit.helper';
 
 const SALT_ROUNDS = 10;
 
@@ -39,6 +41,60 @@ export class AdminService {
     private readonly planLimit: PlanLimitService,
     private readonly uploadService: UploadService,
   ) {}
+
+  async getProfile(tenantId: string, userId: string) {
+    try {
+      const user = await this.prisma.user.findFirst({
+        where: { id: userId, tenantId, role: UserRole.ADMIN },
+        select: {
+          id: true, tenantId: true, name: true, email: true, phone: true,
+          role: true, isActive: true, profileImageUrl: true, gender: true,
+          birthDate: true, createdAt: true, updatedAt: true,
+        },
+      });
+      if (!user) throw new NotFoundException('Admin profile not found');
+      return { data: user };
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
+      handlePrismaError(error, 'AdminProfile');
+    }
+  }
+
+  async updateProfile(tenantId: string, userId: string, dto: UpdateAdminProfileDto) {
+    try {
+      if (dto.email) {
+        const conflict = await this.prisma.user.findFirst({
+          where: { tenantId, email: dto.email, id: { not: userId } },
+        });
+        if (conflict) throw new ConflictException(`Email "${dto.email}" is already in use`);
+      }
+
+      const updated = await this.prisma.user.update({
+        where: { id: userId },
+        data: dto,
+        select: {
+          id: true, name: true, email: true, phone: true,
+          profileImageUrl: true, updatedAt: true,
+        },
+      });
+      return { message: 'Profile updated successfully', data: updated };
+    } catch (error) {
+      if (error instanceof NotFoundException || error instanceof ConflictException) throw error;
+      handlePrismaError(error, 'AdminProfile');
+    }
+  }
+
+  async uploadProfilePhoto(tenantId: string, userId: string, file: Express.Multer.File) {
+    try {
+      if (!file) throw new BadRequestException('No file provided');
+      const { url } = await this.uploadService.uploadProfilePhoto(tenantId, userId, file);
+      await this.prisma.user.update({ where: { id: userId }, data: { profileImageUrl: url } });
+      return { message: 'Profile photo updated successfully', data: { profileImageUrl: url } };
+    } catch (error) {
+      if (error instanceof BadRequestException) throw error;
+      handlePrismaError(error, 'AdminProfile');
+    }
+  }
 
   async getDashboard(tenantId: string) {
     try {
@@ -164,9 +220,41 @@ export class AdminService {
       });
 
       this.logger.log(`Manager created: ${manager.email} in tenant ${tenantId}`);
+      writeAuditLog(this.prisma, { tenantId, userId: manager.id, action: 'CREATE', entity: 'Manager', entityId: manager.id, newValue: { name: manager.name, email: manager.email } });
       return { message: 'Manager created successfully', data: manager };
     } catch (error) {
       if (error instanceof ConflictException) throw error;
+      handlePrismaError(error, 'Manager');
+    }
+  }
+
+  async getManagerDetails(tenantId: string, managerId: string) {
+    try {
+      const manager = await this.prisma.user.findFirst({
+        where: { id: managerId, tenantId, role: UserRole.MANAGER },
+        select: {
+          ...MANAGER_SAFE_SELECT,
+          technician: false,
+        },
+      });
+      if (!manager) throw new NotFoundException(`Manager with ID "${managerId}" not found`);
+
+      const [assignedTechnicians, assignedTickets] = await Promise.all([
+        this.prisma.technician.findMany({
+          where: { tenantId },
+          select: { id: true, name: true, phone: true, isActive: true, rating: true, totalJobs: true },
+        }),
+        this.prisma.ticket.findMany({
+          where: { tenantId },
+          select: { id: true, ticketNumber: true, status: true, createdAt: true, customer: { select: { name: true } } },
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+        }),
+      ]);
+
+      return { data: { manager, assignedTechnicians, assignedTickets } };
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
       handlePrismaError(error, 'Manager');
     }
   }
@@ -198,6 +286,7 @@ export class AdminService {
       if (!manager) throw new NotFoundException(`Manager with ID "${managerId}" not found`);
 
       await this.prisma.user.update({ where: { id: managerId }, data: { isActive: false } });
+      writeAuditLog(this.prisma, { tenantId, userId: managerId, action: 'DEACTIVATE', entity: 'Manager', entityId: managerId, newValue: { isActive: false } });
       return { message: 'Manager deactivated successfully', data: null };
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
@@ -254,6 +343,44 @@ export class AdminService {
       return { data: technicians };
     } catch (error) {
       handlePrismaError(error, 'TechnicianReport');
+    }
+  }
+
+  async getAuditLogs(
+    tenantId: string,
+    userId?: string,
+    entity?: string,
+    from?: string,
+    to?: string,
+    page = 1,
+    limit = 50,
+  ) {
+    try {
+      const where: Record<string, any> = { tenantId };
+      if (userId)  where.userId = userId;
+      if (entity)  where.entity = entity;
+      if (from || to) {
+        where.createdAt = {
+          ...(from && { gte: new Date(from) }),
+          ...(to   && { lte: new Date(to) }),
+        };
+      }
+
+      const skip = (page - 1) * limit;
+      const [logs, total] = await Promise.all([
+        this.prisma.auditLog.findMany({
+          where,
+          include: { user: { select: { name: true, email: true, role: true } } },
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: limit,
+        }),
+        this.prisma.auditLog.count({ where }),
+      ]);
+
+      return { data: logs, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    } catch (error) {
+      handlePrismaError(error, 'AuditLog');
     }
   }
 

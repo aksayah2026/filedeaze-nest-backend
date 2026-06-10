@@ -9,12 +9,14 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { TenantGuard } from '../common/guards/tenant.guard';
 import { Roles } from '../common/decorators/roles.decorator';
-import { TenantId } from '../common/decorators/current-user.decorator';
+import { TenantId, CurrentUser } from '../common/decorators/current-user.decorator';
 import { ParseUUIDPipe } from '../common/pipes/parse-uuid.pipe';
 import { UserRole } from '@prisma/client';
+import { JwtPayload } from '../common/types/jwt-payload.type';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { UpdateSettingsDto } from './dto/update-settings.dto';
 import { CreateManagerDto, UpdateManagerDto } from './dto/create-manager.dto';
+import { UpdateAdminProfileDto } from './dto/update-profile.dto';
 
 @ApiTags('Admin')
 @ApiBearerAuth()
@@ -23,6 +25,38 @@ import { CreateManagerDto, UpdateManagerDto } from './dto/create-manager.dto';
 @Controller('web/admin')
 export class AdminController {
   constructor(private readonly service: AdminService) {}
+
+  // ── Profile ───────────────────────────────────────────────────────────────
+
+  @Get('profile')
+  @ApiOperation({ summary: 'Get admin profile' })
+  getProfile(@TenantId() tenantId: string, @CurrentUser() user: JwtPayload) {
+    return this.service.getProfile(tenantId, user.sub);
+  }
+
+  @Patch('profile')
+  @ApiOperation({ summary: 'Update admin profile (name, email, phone)' })
+  updateProfile(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpdateAdminProfileDto,
+  ) {
+    return this.service.updateProfile(tenantId, user.sub, dto);
+  }
+
+  @Post('profile/photo')
+  @ApiOperation({ summary: 'Upload admin profile photo' })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file'))
+  uploadProfilePhoto(
+    @TenantId() tenantId: string,
+    @CurrentUser() user: JwtPayload,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.service.uploadProfilePhoto(tenantId, user.sub, file);
+  }
+
+  // ── Dashboard ─────────────────────────────────────────────────────────────
 
   @Get('dashboard')
   @ApiOperation({ summary: 'Admin dashboard overview' })
@@ -74,6 +108,12 @@ export class AdminController {
     return this.service.createManager(tenantId, dto);
   }
 
+  @Get('managers/:id')
+  @ApiOperation({ summary: 'Manager details — profile, assigned technicians, recent tickets' })
+  getManagerDetails(@TenantId() tenantId: string, @Param('id', ParseUUIDPipe) id: string) {
+    return this.service.getManagerDetails(tenantId, id);
+  }
+
   @Patch('managers/:id')
   @ApiOperation({ summary: 'Update a manager' })
   updateManager(
@@ -88,6 +128,32 @@ export class AdminController {
   @ApiOperation({ summary: 'Deactivate a manager' })
   deleteManager(@TenantId() tenantId: string, @Param('id', ParseUUIDPipe) id: string) {
     return this.service.deleteManager(tenantId, id);
+  }
+
+  // ── Audit Logs ────────────────────────────────────────────────────────────
+
+  @Get('audit-logs')
+  @ApiOperation({ summary: 'Tenant admin audit logs — filter by user, entity, date range' })
+  @ApiQuery({ name: 'userId', required: false })
+  @ApiQuery({ name: 'entity', required: false, example: 'Ticket' })
+  @ApiQuery({ name: 'from',   required: false, example: '2026-01-01' })
+  @ApiQuery({ name: 'to',     required: false, example: '2026-12-31' })
+  @ApiQuery({ name: 'page',   required: false, type: Number })
+  @ApiQuery({ name: 'limit',  required: false, type: Number })
+  getAuditLogs(
+    @TenantId() tenantId: string,
+    @Query('userId') userId?: string,
+    @Query('entity') entity?: string,
+    @Query('from')   from?: string,
+    @Query('to')     to?: string,
+    @Query('page')   page?: string,
+    @Query('limit')  limit?: string,
+  ) {
+    return this.service.getAuditLogs(
+      tenantId, userId, entity, from, to,
+      page  ? parseInt(page,  10) : 1,
+      limit ? parseInt(limit, 10) : 50,
+    );
   }
 
   @Get('reports/revenue')

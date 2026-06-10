@@ -43,4 +43,19 @@ export class UpdateSettingsDto {
   @IsOptional()
   @IsString({ message: 'UPI QR image URL must be a string' })
   upiQrImageUrl?: string;
+
+  @ApiPropertyOptional({ description: 'Enable push notifications for tenant events' })
+  @IsOptional()
+  @IsBoolean({ message: 'pushNotificationsEnabled must be a boolean' })
+  pushNotificationsEnabled?: boolean;
+
+  @ApiPropertyOptional({ description: 'Enable email notifications for tenant events' })
+  @IsOptional()
+  @IsBoolean({ message: 'emailNotificationsEnabled must be a boolean' })
+  emailNotificationsEnabled?: boolean;
+
+  @ApiPropertyOptional({ example: 'noreply@example.com', description: 'Sender email for outgoing notifications' })
+  @IsOptional()
+  @IsString({ message: 'Sender email must be a string' })
+  senderEmail?: string;
 }

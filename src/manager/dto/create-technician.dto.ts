@@ -21,6 +21,13 @@ export class CreateTechnicianDto {
   password: string;
 }
 
+export class ResetTechnicianPasswordDto {
+  @ApiProperty({ minLength: 8 })
+  @IsString({ message: 'Password must be a string' })
+  @MinLength(8, { message: 'Password must be at least 8 characters' })
+  newPassword: string;
+}
+
 export class UpdateTechnicianDto {
   @ApiPropertyOptional()
   @IsOptional()

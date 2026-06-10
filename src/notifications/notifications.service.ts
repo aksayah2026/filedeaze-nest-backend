@@ -108,6 +108,7 @@ export class NotificationsService {
         INVOICE_GENERATED: { title: 'Invoice Ready', body: 'Your invoice has been generated. Please check your invoices section.' },
         TICKET_CLOSED: { title: 'Ticket Closed', body: 'Your service ticket has been closed. Please share your feedback!' },
         CANCELLED: { title: 'Ticket Cancelled', body: 'Your service ticket has been cancelled.' },
+        REJECTED: { title: 'Technician Unavailable', body: "Your technician couldn't accept the job. We're finding a new one for you." },
       };
 
       const msg = messages[status];

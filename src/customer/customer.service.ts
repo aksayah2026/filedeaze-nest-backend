@@ -10,6 +10,7 @@ import { PlanLimitService } from '../shared/plan-limit/plan-limit.service';
 import { UploadService } from '../upload/upload.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { handlePrismaError } from '../common/utils/prisma-error.handler';
+import { writeAuditLog } from '../common/utils/audit.helper';
 import { TicketStatus, ImageType } from '@prisma/client';
 import { CreateTicketDto } from './dto/create-ticket.dto';
 import { SubmitFeedbackDto } from './dto/submit-feedback.dto';
@@ -84,6 +85,40 @@ export class CustomerService {
     }
   }
 
+  // ── Dashboard ─────────────────────────────────────────────────────────────
+
+  async getDashboard(tenantId: string, userId: string) {
+    try {
+      const customer = await this.resolveCustomer(tenantId, userId);
+
+      const [openTickets, completedTickets, recentInvoice] = await Promise.all([
+        this.prisma.ticket.count({
+          where: {
+            tenantId,
+            customerId: customer.id,
+            status: { notIn: [TicketStatus.TICKET_CLOSED, TicketStatus.CANCELLED] },
+          },
+        }),
+        this.prisma.ticket.count({
+          where: { tenantId, customerId: customer.id, status: TicketStatus.TICKET_CLOSED },
+        }),
+        this.prisma.invoice.findFirst({
+          where: { tenantId, ticket: { customerId: customer.id } },
+          orderBy: { generatedAt: 'desc' },
+          select: {
+            id: true, invoiceNumber: true, total: true, generatedAt: true, pdfUrl: true,
+            ticket: { select: { ticketNumber: true, subCategory: { include: { category: true } } } },
+          },
+        }),
+      ]);
+
+      return { data: { openTickets, completedTickets, recentInvoice } };
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
+      handlePrismaError(error, 'Dashboard');
+    }
+  }
+
   // ── Tickets ───────────────────────────────────────────────────────────────
 
   async raiseTicket(tenantId: string, userId: string, dto: CreateTicketDto, images?: Express.Multer.File[]) {
@@ -113,6 +148,7 @@ export class CustomerService {
             categoryId: dto.categoryId,
             subCategoryId: dto.subCategoryId,
             description: dto.description,
+            serviceAddress: dto.serviceAddress ?? customer.address ?? null,
             priority: dto.priority ?? 'MEDIUM',
             scheduledAt: dto.scheduledAt ? new Date(dto.scheduledAt) : undefined,
             status: TicketStatus.NEW_TICKET,
@@ -136,6 +172,7 @@ export class CustomerService {
       }
 
       void this.notifications.onTicketRaised(tenantId, customer.id);
+      writeAuditLog(this.prisma, { tenantId, userId, action: 'CREATE', entity: 'Ticket', entityId: ticket.id, newValue: { ticketNumber: ticket.ticketNumber, status: ticket.status } });
       this.logger.log(`Ticket raised by customer ${customer.id} in tenant ${tenantId}`);
       return { message: 'Ticket raised successfully', data: ticket };
     } catch (error) {
@@ -147,12 +184,12 @@ export class CustomerService {
     }
   }
 
-  async listMyTickets(tenantId: string, userId: string) {
+  async listMyTickets(tenantId: string, userId: string, status?: TicketStatus) {
     try {
       const customer = await this.resolveCustomer(tenantId, userId);
 
       const tickets = await this.prisma.ticket.findMany({
-        where: { tenantId, customerId: customer.id },
+        where: { tenantId, customerId: customer.id, ...(status && { status }) },
         include: {
           technician: { select: { id: true, name: true, phone: true } },
           subCategory: { include: { category: true } },
@@ -351,8 +388,9 @@ export class CustomerService {
       });
       if (!ticket) throw new NotFoundException(`Ticket "${dto.ticketId}" not found`);
 
-      if (ticket.status !== TicketStatus.TICKET_CLOSED) {
-        throw new BadRequestException('Feedback can only be submitted after the ticket is closed');
+      const feedbackAllowed: TicketStatus[] = [TicketStatus.TICKET_CLOSED, TicketStatus.INVOICE_GENERATED];
+      if (!feedbackAllowed.includes(ticket.status)) {
+        throw new BadRequestException('Feedback can only be submitted once the ticket is invoiced or closed');
       }
 
       const existing = await this.prisma.feedback.findUnique({ where: { ticketId: dto.ticketId } });

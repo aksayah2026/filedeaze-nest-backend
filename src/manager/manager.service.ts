@@ -9,10 +9,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { PlanLimitService } from '../shared/plan-limit/plan-limit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { handlePrismaError } from '../common/utils/prisma-error.handler';
+import { writeAuditLog } from '../common/utils/audit.helper';
 import * as bcrypt from 'bcrypt';
 import { UserRole, TicketStatus } from '@prisma/client';
 import { TICKET_FORWARD_TRANSITIONS } from '../common/constants/ticket-status.constant';
-import { CreateTechnicianDto, UpdateTechnicianDto } from './dto/create-technician.dto';
+import { CreateTechnicianDto, UpdateTechnicianDto, ResetTechnicianPasswordDto } from './dto/create-technician.dto';
 import { AssignTechnicianDto, CloseTicketDto, TicketFilterDto } from './dto/assign-ticket.dto';
 import {
   CreateCategoryDto, UpdateCategoryDto,
@@ -82,7 +83,7 @@ export class ManagerService {
     }
   }
 
-  async createTechnician(tenantId: string, dto: CreateTechnicianDto) {
+  async createTechnician(tenantId: string, dto: CreateTechnicianDto, actorId: string) {
     try {
       await this.planLimit.checkLimit(tenantId, 'technician');
 
@@ -101,6 +102,7 @@ export class ManagerService {
       });
 
       this.logger.log(`Technician created: ${dto.email} in tenant ${tenantId}`);
+      writeAuditLog(this.prisma, { tenantId, userId: actorId, action: 'CREATE', entity: 'Technician', entityId: technician.id, newValue: { name: technician.name, email: technician.email } });
       return { message: 'Technician created successfully', data: technician };
     } catch (error) {
       if (error instanceof ConflictException) throw error;
@@ -161,6 +163,26 @@ export class ManagerService {
     }
   }
 
+  async resetTechnicianPassword(tenantId: string, id: string, dto: ResetTechnicianPasswordDto, actorId: string) {
+    try {
+      const tech = await this.prisma.technician.findFirst({ where: { id, tenantId } });
+      if (!tech) throw new NotFoundException(`Technician with ID "${id}" not found`);
+
+      const passwordHash = await bcrypt.hash(dto.newPassword, SALT_ROUNDS);
+      await this.prisma.user.update({ where: { id: tech.userId }, data: { passwordHash } });
+
+      // Revoke all active sessions so the technician must log in with the new password
+      await this.prisma.refreshToken.deleteMany({ where: { userId: tech.userId } });
+
+      writeAuditLog(this.prisma, { tenantId, userId: actorId, action: 'RESET_PASSWORD', entity: 'Technician', entityId: id });
+      this.logger.log(`Password reset for technician ${id} by actor ${actorId}`);
+      return { message: 'Technician password reset successfully' };
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
+      handlePrismaError(error, 'Technician');
+    }
+  }
+
   async getTechnicianLocation(tenantId: string, id: string) {
     try {
       const tech = await this.prisma.technician.findFirst({
@@ -172,6 +194,36 @@ export class ManagerService {
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
       handlePrismaError(error, 'Technician');
+    }
+  }
+
+  async getTechnicianRoute(tenantId: string, id: string, date?: string) {
+    try {
+      const tech = await this.prisma.technician.findFirst({
+        where: { id, tenantId },
+        select: { id: true, name: true },
+      });
+      if (!tech) throw new NotFoundException(`Technician with ID "${id}" not found`);
+
+      let dateFilter: Record<string, any> = {};
+      if (date) {
+        const start = new Date(date);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(date);
+        end.setHours(23, 59, 59, 999);
+        dateFilter = { timestamp: { gte: start, lte: end } };
+      }
+
+      const route = await this.prisma.technicianLocation.findMany({
+        where: { technicianId: id, tenantId, ...dateFilter },
+        orderBy: { timestamp: 'asc' },
+        select: { latitude: true, longitude: true, timestamp: true },
+      });
+
+      return { data: { technician: tech, route } };
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
+      handlePrismaError(error, 'TechnicianLocation');
     }
   }
 
@@ -421,8 +473,8 @@ export class ManagerService {
         return t;
       });
 
-      // Notify technician
       void this.notifications.onTicketAssigned(tenantId, tech.userId, ticketId);
+      writeAuditLog(this.prisma, { tenantId, userId: actorId, action: 'ASSIGN', entity: 'Ticket', entityId: ticketId, newValue: { technicianId: dto.technicianId, technicianName: tech.name } });
 
       return { message: 'Technician assigned successfully', data: updated };
     } catch (error) {
@@ -460,6 +512,8 @@ export class ManagerService {
         return t;
       });
 
+      writeAuditLog(this.prisma, { tenantId, userId: actorId, action: 'REASSIGN', entity: 'Ticket', entityId: ticketId, oldValue: { technicianId: ticket.technicianId }, newValue: { technicianId: dto.technicianId, technicianName: tech.name } });
+
       return { message: 'Ticket reassigned successfully', data: updated };
     } catch (error) {
       if (error instanceof NotFoundException || error instanceof BadRequestException) throw error;
@@ -492,6 +546,7 @@ export class ManagerService {
         select: { userId: true },
       });
       if (customer) void this.notifications.onTicketStatusChanged(tenantId, customer.userId, 'TICKET_CLOSED', ticketId);
+      writeAuditLog(this.prisma, { tenantId, userId: actorId, action: 'CLOSE', entity: 'Ticket', entityId: ticketId, newValue: { status: 'TICKET_CLOSED' } });
 
       return { message: 'Ticket closed successfully', data: updated };
     } catch (error) {
@@ -519,6 +574,13 @@ export class ManagerService {
           data: { tenantId, ticketId, status: 'CANCELLED' as any, changedBy: actorId, notes: `Cancelled: ${reason}` },
         });
       });
+
+      const customer = await this.prisma.customer.findUnique({
+        where: { id: ticket.customerId },
+        select: { userId: true },
+      });
+      if (customer) void this.notifications.onTicketStatusChanged(tenantId, customer.userId, 'CANCELLED', ticketId);
+      writeAuditLog(this.prisma, { tenantId, userId: actorId, action: 'CANCEL', entity: 'Ticket', entityId: ticketId, newValue: { status: 'CANCELLED', reason } });
 
       return { message: 'Ticket cancelled successfully' };
     } catch (error) {
@@ -598,6 +660,8 @@ export class ManagerService {
         },
       });
 
+      writeAuditLog(this.prisma, { tenantId, userId: actorId, action: 'VERIFY', entity: 'Payment', entityId: paymentId, newValue: { status: 'VERIFIED' } });
+
       return { message: 'Payment verified successfully', data: updated };
     } catch (error) {
       if (error instanceof NotFoundException || error instanceof BadRequestException) throw error;
@@ -628,6 +692,86 @@ export class ManagerService {
       return { data: { payments, totalVerified: Number(totalResult._sum.amount ?? 0) } };
     } catch (error) {
       handlePrismaError(error, 'Payments');
+    }
+  }
+
+  // ── Invoices (Screens 8–10) ───────────────────────────────────────────────
+
+  async listInvoices(
+    tenantId: string,
+    search?: string,
+    status?: string,
+    from?: string,
+    to?: string,
+  ) {
+    try {
+      const where: Record<string, any> = { tenantId };
+      if (from || to) {
+        where['generatedAt'] = {
+          ...(from && { gte: new Date(from) }),
+          ...(to   && { lte: new Date(to) }),
+        };
+      }
+      if (status) where['payment'] = { status };
+      if (search) {
+        where['OR'] = [
+          { invoiceNumber: { contains: search, mode: 'insensitive' } },
+          { ticket: { ticketNumber: { contains: search, mode: 'insensitive' } } },
+          { ticket: { customer: { name: { contains: search, mode: 'insensitive' } } } },
+        ];
+      }
+
+      const invoices = await this.prisma.invoice.findMany({
+        where,
+        include: {
+          ticket: {
+            select: {
+              ticketNumber: true,
+              customer: { select: { name: true, phone: true } },
+              subCategory: { include: { category: { select: { name: true } } } },
+            },
+          },
+          payment: { select: { method: true, status: true, collectedAt: true, amount: true } },
+        },
+        orderBy: { generatedAt: 'desc' },
+        take: 100,
+      });
+
+      return { data: invoices };
+    } catch (error) {
+      handlePrismaError(error, 'Invoice');
+    }
+  }
+
+  async getInvoice(tenantId: string, invoiceId: string) {
+    try {
+      const invoice = await this.prisma.invoice.findFirst({
+        where: { id: invoiceId, tenantId },
+        include: {
+          ticket: {
+            include: {
+              customer: { select: { name: true, phone: true, address: true, city: true } },
+              technician: { select: { name: true, phone: true } },
+              subCategory: { include: { category: { select: { name: true } } } },
+            },
+          },
+          payment: true,
+        },
+      });
+      if (!invoice) throw new NotFoundException(`Invoice "${invoiceId}" not found`);
+
+      const [tenant, settings] = await Promise.all([
+        this.prisma.tenant.findUnique({
+          where: { id: tenantId },
+          select: { companyName: true, email: true, phone: true, address: true, city: true, logoUrl: true },
+        }),
+        this.prisma.tenantSetting.findUnique({ where: { tenantId } }),
+      ]);
+
+      return { data: { invoice, tenant, settings } };
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
+      handlePrismaError(error, 'Invoice');
     }
   }
 }

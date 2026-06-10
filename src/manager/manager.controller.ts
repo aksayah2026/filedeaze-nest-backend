@@ -11,7 +11,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CurrentUser, TenantId } from '../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { JwtPayload } from '../common/types/jwt-payload.type';
-import { CreateTechnicianDto, UpdateTechnicianDto } from './dto/create-technician.dto';
+import { CreateTechnicianDto, UpdateTechnicianDto, ResetTechnicianPasswordDto } from './dto/create-technician.dto';
 import { AssignTechnicianDto, CloseTicketDto, CancelTicketDto, TicketFilterDto } from './dto/assign-ticket.dto';
 import {
   CreateCategoryDto, UpdateCategoryDto,
@@ -43,8 +43,8 @@ export class ManagerController {
 
   @Post('technicians')
   @ApiOperation({ summary: 'Create a technician (plan limit enforced)' })
-  createTechnician(@TenantId() tenantId: string, @Body() dto: CreateTechnicianDto) {
-    return this.service.createTechnician(tenantId, dto);
+  createTechnician(@TenantId() tenantId: string, @Body() dto: CreateTechnicianDto, @CurrentUser() user: JwtPayload) {
+    return this.service.createTechnician(tenantId, dto, user.sub);
   }
 
   @Get('technicians/:id')
@@ -69,10 +69,32 @@ export class ManagerController {
     return this.service.deleteTechnician(tenantId, id);
   }
 
+  @Patch('technicians/:id/reset-password')
+  @ApiOperation({ summary: 'Reset technician password — forces re-login on all devices' })
+  resetTechnicianPassword(
+    @TenantId() tenantId: string,
+    @Param('id') id: string,
+    @Body() dto: ResetTechnicianPasswordDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.service.resetTechnicianPassword(tenantId, id, dto, user.sub);
+  }
+
   @Get('technicians/:id/location')
   @ApiOperation({ summary: 'Get live GPS location of technician' })
   getTechnicianLocation(@TenantId() tenantId: string, @Param('id') id: string) {
     return this.service.getTechnicianLocation(tenantId, id);
+  }
+
+  @Get('technicians/:id/route')
+  @ApiOperation({ summary: 'Get route history for a technician — filter by date (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'date', required: false, example: '2026-06-09' })
+  getTechnicianRoute(
+    @TenantId() tenantId: string,
+    @Param('id') id: string,
+    @Query('date') date?: string,
+  ) {
+    return this.service.getTechnicianRoute(tenantId, id, date);
   }
 
   // ── Service Categories ──────────────────────────────────────────────────
@@ -275,5 +297,27 @@ export class ManagerController {
     @Param('id') id: string,
   ) {
     return this.service.verifyPayment(tenantId, id, user.sub);
+  }
+
+  // ── Invoices (Screens 8–10) ───────────────────────────────────────────────
+
+  @Get('invoices')
+  @ApiOperation({ summary: 'Invoice list — search by number, ticket, customer; filter by date' })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'from',   required: false, example: '2026-01-01' })
+  @ApiQuery({ name: 'to',     required: false, example: '2026-12-31' })
+  listInvoices(
+    @TenantId() tenantId: string,
+    @Query('search') search?: string,
+    @Query('from')   from?: string,
+    @Query('to')     to?: string,
+  ) {
+    return this.service.listInvoices(tenantId, search, undefined, from, to);
+  }
+
+  @Get('invoices/:id')
+  @ApiOperation({ summary: 'Invoice details + PDF URL — for preview and download' })
+  getInvoice(@TenantId() tenantId: string, @Param('id') id: string) {
+    return this.service.getInvoice(tenantId, id);
   }
 }

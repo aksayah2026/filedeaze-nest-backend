@@ -108,6 +108,12 @@ enum OtpPurpose {
   FORGOT_PASSWORD
 }
 
+enum ExperienceLevel {
+  BEGINNER
+  INTERMEDIATE
+  EXPERT
+}
+
 // ─── Master Tables (no tenantId) ─────────────────────────────────────────────
 
 model Tenant {
@@ -280,6 +286,7 @@ model Technician {
   attendance      Attendance[]
   availability    TechnicianAvailability[]
   locationHistory TechnicianLocation[]
+  skills          TechnicianSkill[]
 
   @@index([tenantId])
   @@map("technicians")
@@ -491,9 +498,10 @@ model Ticket {
   technicianId  String?
   categoryId    String
   subCategoryId String
-  description   String?
-  priority      TicketPriority  @default(MEDIUM)
-  scheduledAt   DateTime?
+  description    String?
+  serviceAddress String?
+  priority       TicketPriority  @default(MEDIUM)
+  scheduledAt    DateTime?
   status        TicketStatus    @default(NEW_TICKET)
   pendingReason PendingReason?
   pendingNotes  String?
@@ -675,10 +683,13 @@ model TenantSetting {
   razorpayKeyId         String?
   razorpayKeySecret     String?
   razorpayWebhookSecret String?
-  upiMerchantId         String?
-  upiMerchantName       String?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  upiMerchantId                String?
+  upiMerchantName              String?
+  pushNotificationsEnabled     Boolean  @default(true)
+  emailNotificationsEnabled    Boolean  @default(false)
+  senderEmail                  String?
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
 
   @@map("tenant_settings")
 }
@@ -714,6 +725,43 @@ model DeviceToken {
   @@index([userId])
   @@index([tenantId])
   @@map("device_tokens")
+}
+
+// ─── Skills ──────────────────────────────────────────────────────────────────
+
+model Skill {
+  id          String   @id @default(uuid())
+  tenantId    String
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  technicianSkills TechnicianSkill[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("skills")
+}
+
+model TechnicianSkill {
+  id                      String          @id @default(uuid())
+  tenantId                String
+  technicianId            String
+  skillId                 String
+  experienceLevel         ExperienceLevel @default(BEGINNER)
+  certificationNumber     String?
+  certificationExpiryDate DateTime?       @db.Date
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+
+  technician Technician @relation(fields: [technicianId], references: [id])
+  skill      Skill      @relation(fields: [skillId], references: [id])
+
+  @@unique([technicianId, skillId])
+  @@index([tenantId])
+  @@map("technician_skills")
 }
 
 model RefreshToken {
